@@ -152,6 +152,8 @@ cli/build/install/noir/bin/noir.bat    # Windows
 
 上游另提供自带运行时的 portable 包（双击启动，不用装 Java），由上游 CI 用 jpackage 打包，见 [上游 Releases](https://github.com/Verlintas/NOIR/releases)。本仓库不提供，那些包与其 `SHA256SUMS.txt` 只对应上游代码。
 
+卸载与清理（构建产物、`~/.noir` 缓存、扫描结果、设备侧残留、撤销 appops）见 [docs/runbook.md](docs/runbook.md) 的「卸载与清理」。
+
 ## 用法
 
 ```bash

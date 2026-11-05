@@ -76,6 +76,37 @@ adb shell cmd appops get <包名> PROJECT_MEDIA
 - 彻底的做法是不经过 shim：用 `java.exe -cp "<jadx>\lib\*" jadx.cli.JadxCLI <参数>` 直接启动。本仓库尚未实现，需要同时处理「下载解压目录」「scoop shim」「任意路径解压」三种布局。
 - Linux / macOS 不受影响，那两个平台走的是纯 argv 启动。
 
+## 卸载与清理
+
+工具没有安装步骤，也不写系统目录，删文件就算卸载。
+
+**构建产物**（在项目根）：
+
+```bash
+rm -rf build cli/build core/build .gradle
+```
+
+**本机缓存与下载的工具**：
+
+```bash
+rm -rf ~/.noir            # endpoints-v3.tsv 缓存 + tools 下自动下载的 adb/jadx
+```
+
+**扫描产物**：删掉 `--out` 指定的目录，默认是项目或当前目录下的 `noir-out/`。
+
+**设备侧残留**（新版本扫描结束会自动清，旧版本或中断时可能留下）：
+
+```bash
+adb shell rm -f /data/local/tmp/noir_scan.sh /data/local/tmp/noir_targets.txt /data/local/tmp/noir_dex.bin
+```
+
+**撤销对设备的改动**：
+
+- appops：按 `rollback.txt` 逐条执行，格式是 `adb shell cmd appops set --user <用户> <包名> <操作> <原模式>`。
+- 被 `--purge` 卸载的应用：`adb shell pm install-existing --user <卸载时的用户号> <包名>`，数据不会回来。
+
+`~/.gradle` 是 Gradle 的全局缓存，删了会波及其它项目，一般不动。如果自己加过启动链接或包装脚本，删掉那一个文件即可，不影响构建产物。
+
 ## 回滚
 
 `rollback.txt` 每条在执行前落盘，格式为 `adb shell cmd appops set --user <用户> <包名> <操作> <原模式>`，逐条执行即恢复。因为写在执行前，命令结果未确认时也会留一条，宁可多一条也别丢恢复手段。
