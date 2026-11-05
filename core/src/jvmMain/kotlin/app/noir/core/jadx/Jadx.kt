@@ -24,16 +24,27 @@ class Jadx(private val bin: String = System.getenv("JADX") ?: "jadx") {
         false
     }
 
-    fun decompile(apk: File, outDir: File, noRes: Boolean = true): Int {
+    fun decompile(apk: File, outDir: File, noRes: Boolean = true, timeoutSec: Long = 900): Int {
         outDir.mkdirs()
         val args = mutableListOf(bin, "-d", outDir.absolutePath)
         if (noRes) args += "--no-res"
         args += apk.absolutePath
 
-        val process = ProcessBuilder(Exec.argv(bin, args.drop(1))).redirectErrorStream(true).start()
-        process.inputStream.bufferedReader().use { it.readText() }
-        process.waitFor()
-        return process.exitValue()
+        // 输出落临时文件：不把 jadx 的全部日志读进内存，进程不退出时按超时强杀。
+        val log = File.createTempFile("noir-jadx-", ".log")
+        val process = ProcessBuilder(Exec.argv(bin, args.drop(1)))
+            .redirectErrorStream(true)
+            .redirectOutput(log)
+            .start()
+        val finished = process.waitFor(timeoutSec, TimeUnit.SECONDS)
+        if (!finished) {
+            process.destroyForcibly()
+            log.delete()
+            return -1
+        }
+        val code = process.exitValue()
+        log.delete()
+        return code
     }
 
     fun grep(dir: File, patterns: List<String>, maxHits: Int = 200): List<JadxHit> {
