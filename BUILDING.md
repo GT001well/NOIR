@@ -61,7 +61,7 @@ export GRADLE_OPTS="-Dhttps.proxyHost=127.0.0.1 -Dhttps.proxyPort=7897 \
 
 ## Arch Linux 注意事项
 
-上游 README 的官方支持列表只写了 Debian / Ubuntu。构建链本身与发行版无关，Arch 上按上述步骤即可完成构建与测试（实测 Gradle 9.8.2 + JDK 21，32 个测试全部通过）。
+上游 README 的官方支持列表只写了 Debian / Ubuntu。构建链本身与发行版无关，Arch 上按上述步骤即可完成构建与测试（实测 Gradle 9.8.2 + JDK 21，37 个测试全部通过）。
 
 运行期依赖本机 `adb` 与 `jadx`，用包管理器安装即可，无需执行 `noir setup`；这样也避开了 `Setup.kt` 下载环节（见 `docs/security-hardening.md`）。
 

@@ -5,6 +5,23 @@ The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ## [Unreleased]
 
+### Fixed
+
+- **failure visibility** — dumpsys / pm / pull failures, unfinished device-side
+  scans and truncated reads now abort or surface via `incomplete.txt` instead of
+  producing a clean-looking report.
+- **rollback** — entries are written before each change and appended across runs;
+  predicted rollbacks moved to `plan-rollback.txt`.
+- **AppOps verification** — success is decided by the resulting mode, unreadable
+  modes are skipped, and failures exit non-zero.
+- **timeouts** — `exec`, `execStreaming` and jadx decompilation honour timeouts;
+  `--timeout` sets the jadx one (default 1800s).
+- **permissions & cache** — coarse location, legacy storage, SMS/call and
+  media-audio permissions are scanned and mapped; cache keys carry device serial
+  and build fingerprint (v3).
+- **CLI** — unknown options and missing values are rejected; multiple devices
+  require `--serial`; `--all` no longer hits the `--limit` default.
+
 ## [0.2.6] — 2026-11-04
 
 ### Fixed

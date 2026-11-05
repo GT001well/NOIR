@@ -7,7 +7,7 @@
 
 代码没有发现后门、外联上报、提权或持久化行为，可以作为本地工具使用。
 
-主要短板集中在下载与解压环节，且都可以通过「不使用 `noir setup`、改为源码构建」规避，本分支已就地加固（见 `security-hardening.md`）。
+主要短板集中在下载与解压环节，且都可以通过「不使用 `noir setup`、改为源码构建」规避，本仓库已就地加固（见 `security-hardening.md`）。
 
 ## 风险项
 
@@ -21,7 +21,7 @@
 | 低 | Gradle wrapper 无分发校验和 | `gradle-wrapper.properties` | 首次构建依赖 TLS 信任 |
 | 低 | CI 的 actions 按 tag 固定 | `.github/workflows/*` | 行业通例 |
 | 提示 | 报告含设备指纹 | `report.json` / `report.md` | 含 fingerprint、serial、主机信息，外发前需清理 |
-| 提示 | 设备端残留 | `/data/local/tmp/noir_*` | 上游不清理；本分支已修复 |
+| 提示 | 设备端残留 | `/data/local/tmp/noir_*` | 上游不清理；本仓库已修复 |
 | 行为 | `pm uninstall --user 0` | `Main.kt` | 可用 `pm install-existing` 恢复，但该用户数据会清空 |
 
 ## README 宣称的核实

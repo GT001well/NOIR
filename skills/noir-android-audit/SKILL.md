@@ -61,5 +61,5 @@ noir auto --serial <S> --out <目录>      # 只读盘点 + 处置计划（dry-r
 
 ## 参考
 
-- 仓库：`https://github.com/GT001well/NOIR`，加固分支 `feat/security-hardening`
+- 仓库：`https://github.com/GT001well/NOIR`，相对上游的加固见 `docs/security-hardening.md`
 - 上游：`https://github.com/Verlintas/NOIR`（MIT）
