@@ -50,7 +50,9 @@ Keep `commonMain` free of JVM imports — the Android and iOS targets are planne
    problem.
 3. **Width matters.** Any new dashboard or box line must survive `COLUMNS=50`.
    `TuiTest` asserts this.
-4. **No network calls.** The tool must stay fully offline.
+4. **No new network calls.** The tool must stay offline apart from the explicit
+   `noir setup` download of adb / jadx; scanning and reporting must never reach
+   the network.
 5. **Japanese/Chinese text** in output is fine; keep it short enough for narrow
    terminals (the renderer wraps, but tables do not scroll).
 
@@ -62,7 +64,7 @@ Keep `commonMain` free of JVM imports — the Android and iOS targets are planne
 
 ## Pull requests
 
-- `./gradlew :core:jvmTest :cli:installDist` must pass
+- `./gradlew :core:jvmTest :cli:test :cli:installDist` must pass
 - add a line to `CHANGELOG.md` under `Unreleased`
 - if the change affects output, paste a before/after snippet
 

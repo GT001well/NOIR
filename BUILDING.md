@@ -14,7 +14,7 @@
 ## 构建
 
 ```bash
-git clone https://github.com/Verlintas/NOIR
+git clone https://github.com/GT001well/NOIR
 cd NOIR
 ./gradlew :cli:installDist
 ```

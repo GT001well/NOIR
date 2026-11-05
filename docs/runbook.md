@@ -25,7 +25,8 @@ domains-trackers.txt      可整份拦截（统计/广告/崩溃上报）
 domains-other.txt         需逐条判断
 domains-functional.txt    禁止拦截（推送/登录/支付/商店/更新）
 plan.txt                  本次可执行的 appops
-rollback.txt              对应的回滚命令
+plan-rollback.txt         按 plan 推测的回滚，未执行，仅供参考
+rollback.txt              真实回滚命令，执行前写入，记的是改动前模式
 work/                     中间文件，含触发的兜底拉包（可删）
 ```
 
@@ -65,8 +66,20 @@ adb shell cmd appops get <包名> PROJECT_MEDIA
 
 `deep` 与 `deepscan` 则一定会 `adb pull` 整包交给 jadx，大游戏可能占用数 GB。
 
+### 5. Windows 下 jadx 经 `cmd /c` 启动
+
+`deep` / `deepscan` 在 Windows 上会走 `Exec.argv` 的批处理分支：`.bat` / `.cmd` 被包成 `cmd /c <路径> <参数…>`。cmd.exe 会重新解析整条命令行，所以 jadx 安装路径里出现空格、`&`、`^`、`%` 或引号时，可能被当成语法，表现为启动失败或参数被吞。
+
+现状与规避：
+
+- 把 jadx 放到不含空格与特殊字符的目录（例如 `C:\jadx`），用 `--jadx C:\jadx\bin\jadx.bat` 指定，可以绕开绝大多数情况。
+- 彻底的做法是不经过 shim：用 `java.exe -cp "<jadx>\lib\*" jadx.cli.JadxCLI <参数>` 直接启动。本仓库尚未实现，需要同时处理「下载解压目录」「scoop shim」「任意路径解压」三种布局。
+- Linux / macOS 不受影响，那两个平台走的是纯 argv 启动。
+
 ## 回滚
 
-`rollback.txt` 逐条记录了改动前的 AppOps 模式，格式为 `adb shell cmd appops set --user <用户> <包名> <操作> <原模式>`。逐条执行即恢复。
+`rollback.txt` 每条在执行前落盘，格式为 `adb shell cmd appops set --user <用户> <包名> <操作> <原模式>`，逐条执行即恢复。因为写在执行前，命令结果未确认时也会留一条，宁可多一条也别丢恢复手段。
 
-被 `--purge` 卸载的用户应用可用 `adb shell pm install-existing --user 0 <包名>` 恢复，但该用户下的应用数据不会回来。
+`plan-rollback.txt` 是按计划推测的，不构成执行记录；重跑 scan / ui / auto 只会刷新它，不会动 `rollback.txt`。
+
+被 `--purge` 卸载的用户应用可用 `adb shell pm install-existing --user <卸载时的用户号> <包名>` 恢复（`rollback.txt` 之外，卸载日志里会打印具体用户），但该用户下的应用数据不会回来。

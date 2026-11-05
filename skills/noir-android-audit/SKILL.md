@@ -55,8 +55,8 @@ noir auto --serial <S> --out <目录>      # 只读盘点 + 处置计划（dry-r
 ## 处置纪律
 
 - `--apply` 前先读 `plan.txt`，确认每条 appop 的作用面（`PROJECT_MEDIA` 影响截屏/投屏/识屏，`GET_USAGE_STATS` 一般无感）。
-- `rollback.txt` 逐条记录原模式，回滚就是照抄执行。
-- `--purge` 卸载用 `pm install-existing --user 0 <包>` 能装回来，但用户数据不会回来。
+- `rollback.txt` 每条在执行前写入，记的是改动前模式，回滚就是照抄执行。重跑扫描只刷新 `plan-rollback.txt`，不会覆盖它。
+- `--purge` 卸载用 `pm install-existing --user <卸载时的用户号> <包>` 能装回来，但用户数据不会回来。
 - 报告含设备指纹与序列号，外发前自行清理。
 
 ## 参考

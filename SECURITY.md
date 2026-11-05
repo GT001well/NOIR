@@ -7,13 +7,19 @@ NOIR is a **local, read-only-by-default** audit tool. It talks to a device throu
 
 - no telemetry, no analytics, no network calls of its own
 - no root, no bootloader unlock, no system partition changes
-- `--apply` only sets Android **app-ops**, which are reversible with `default`
+- `--apply` on `auto` / `deepscan` only sets Android **app-ops**, which are reversible with `default`
+- `noir block --apply` is the exception: it runs `pm uninstall --user 0` for the listed packages
 
 ## Reporting a vulnerability in NOIR
 
-Please use GitHub's private vulnerability reporting:
+Please use GitHub's private vulnerability reporting on this repository:
 
-<https://github.com/Verlintas/NOIR/security/advisories/new>
+<https://github.com/GT001well/NOIR/security/advisories/new>
+
+If private reporting is not enabled there, open an issue without reproduction
+details first and wait for a contact channel. Upstream NOIR is a separate
+repository: report upstream-only defects to
+<https://github.com/Verlintas/NOIR/issues>.
 
 Include:
 

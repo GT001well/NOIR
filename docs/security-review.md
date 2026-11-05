@@ -31,7 +31,7 @@
 | 不联网、无遥测、无版本检查、无崩溃上报 | 成立。网络代码仅出现在 `Setup.kt`，地址为 `dl.google.com` 的 platform-tools 与 jadx v1.5.6 的 GitHub release |
 | 不上传数据、不需要账号 | 成立。无外发端点，报告全部落本地 |
 | 不修改系统分区、不需要 root | 成立。设备端仅执行 `pm`、`dumpsys`、`getprop`、`unzip`、`strings`、`cmd appops set|get` |
-| 不自动卸载，除非显式 `--aggressive` | 成立。卸载位于 `--purge` 分支，默认需交互确认，非交互必须 `--yes` |
+| 不自动卸载，除非显式要求 | 成立。卸载只在 `--purge`（`deepscan`，逐条确认）与 `noir block --apply` 出现；后者不确认、也不检查 `--yes`，执行前只打印恢复命令 |
 
 ## 未发现的项目
 
@@ -39,7 +39,7 @@
 - 内嵌数据：无 Base64 大块、无超长单行载荷、除截图与 wrapper jar 外无二进制资源。
 - 代码加载：无 `Class.forName`、无 `URLClassLoader`、无 `System.load`。
 - 混淆：无，源码可读。
-- 子进程：仅 `adb` 与 `jadx`，全部为 `ProcessBuilder` 参数列表形式，不经主机 shell。
+- 子进程：仅 `adb` 与 `jadx`，全部为 `ProcessBuilder` 参数列表形式；Linux / macOS 不经主机 shell，Windows 上 `.bat` / `.cmd` 会包一层 `cmd /c`（见 `runbook.md` 已知问题第 5 条）。
 - 写入点：`~/.noir/`、`./noir-out/**`、`/data/local/tmp/`。
 - 持久化：无开机自启、无定时任务、无桌面项。
 
