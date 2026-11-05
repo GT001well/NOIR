@@ -10,7 +10,12 @@ import app.noir.core.platform.Exec
 import java.io.File
 import java.util.concurrent.TimeUnit
 
-data class ExecResult(val code: Int, val output: String, val timedOut: Boolean = false) {
+data class ExecResult(
+    val code: Int,
+    val output: String,
+    val timedOut: Boolean = false,
+    val truncated: Boolean = false
+) {
     val ok: Boolean get() = code == 0 && !timedOut
 }
 
@@ -21,7 +26,13 @@ class Adb(private val bin: String = System.getenv("ADB") ?: "adb") {
         val process = ProcessBuilder(Exec.argv(bin, args))
             .redirectErrorStream(true)
             .start()
-        val output = process.inputStream.bufferedReader().use { it.readText() }
+        // 放到独立线程里读：在主线程读到 EOF 再等退出，进程卡住不关 stdout 时超时永远不生效。
+        val buffer = StringBuffer()
+        val pump = Thread {
+            runCatching {
+                process.inputStream.bufferedReader().use { buffer.append(it.readText()) }
+            }
+        }.apply { isDaemon = true; start() }
         val finished = if (timeoutSec <= 0) {
             process.waitFor()
             true
@@ -30,9 +41,12 @@ class Adb(private val bin: String = System.getenv("ADB") ?: "adb") {
         }
         if (!finished) {
             process.destroyForcibly()
-            return ExecResult(-1, output, timedOut = true)
+            pump.join(500)
+            return ExecResult(-1, buffer.toString(), timedOut = true)
         }
-        return ExecResult(process.exitValue(), output)
+        // 进程已退出，正常情况读线程立刻收尾；给足时间，避免大输出被静默截断。
+        pump.join(30_000)
+        return ExecResult(process.exitValue(), buffer.toString(), truncated = pump.isAlive)
     }
 
     /**
@@ -47,14 +61,19 @@ class Adb(private val bin: String = System.getenv("ADB") ?: "adb") {
         val process = ProcessBuilder(Exec.argv(bin, args))
             .redirectErrorStream(true)
             .start()
-        val output = StringBuilder()
-        process.inputStream.bufferedReader().use { reader ->
-            while (true) {
-                val line = reader.readLine() ?: break
-                output.append(line).append('\n')
-                onLine(line)
+        val output = StringBuffer()
+        // 同样放独立线程读，否则超时只在读完输出后才生效。
+        val pump = Thread {
+            runCatching {
+                process.inputStream.bufferedReader().use { reader ->
+                    while (true) {
+                        val line = reader.readLine() ?: break
+                        output.append(line).append('\n')
+                        onLine(line)
+                    }
+                }
             }
-        }
+        }.apply { isDaemon = true; start() }
         val finished = if (timeoutSec <= 0) {
             process.waitFor()
             true
@@ -63,9 +82,11 @@ class Adb(private val bin: String = System.getenv("ADB") ?: "adb") {
         }
         if (!finished) {
             process.destroyForcibly()
+            pump.join(500)
             return ExecResult(-1, output.toString(), timedOut = true)
         }
-        return ExecResult(process.exitValue(), output.toString())
+        pump.join(30_000)
+        return ExecResult(process.exitValue(), output.toString(), truncated = pump.isAlive)
     }
 
     fun shell(serial: String?, command: String, timeoutSec: Long = 180): ExecResult {
@@ -80,9 +101,14 @@ class Adb(private val bin: String = System.getenv("ADB") ?: "adb") {
     }
 
     fun devices(): List<Device> {
-        val out = exec(listOf("devices", "-l"), timeoutSec = 30).output
-        return out.lineSequence()
-            .drop(1)
+        val result = exec(listOf("devices", "-l"), timeoutSec = 30)
+        if (!result.ok) return emptyList()
+        val lines = result.output.lineSequence().toList()
+        // 找不到表头说明输出不是预期的设备列表（daemon 日志、错误信息），不要硬解析。
+        val header = lines.indexOfFirst { it.startsWith("List of devices attached") }
+        if (header < 0) return emptyList()
+        val body = lines.drop(header + 1)
+        return body.asSequence()
             .filter { it.isNotBlank() && !it.startsWith("*") }
             .mapNotNull { line ->
                 val parts = line.split(Regex("\\s+")).filter { it.isNotEmpty() }
