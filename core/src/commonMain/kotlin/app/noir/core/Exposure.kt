@@ -13,7 +13,8 @@ enum class DataType(val label: String) {
     IDENTITY("设备标识"),
     FILES("文件/相册"),
     CALENDAR("日历"),
-    ACCOUNTS("账号")
+    ACCOUNTS("账号"),
+    HEALTH("健康/传感器")
 }
 
 /**
@@ -31,10 +32,15 @@ object Exposure {
         "READ_CONTACTS" to setOf(DataType.CONTACTS),
         "READ_SMS" to setOf(DataType.SMS),
         "RECEIVE_SMS" to setOf(DataType.SMS),
+        "SEND_SMS" to setOf(DataType.SMS),
         "READ_CALL_LOG" to setOf(DataType.CALLS),
+        "CALL_PHONE" to setOf(DataType.CALLS),
+        "ANSWER_PHONE_CALLS" to setOf(DataType.CALLS),
         "READ_PHONE_STATE" to setOf(DataType.IDENTITY),
+        "READ_PHONE_NUMBERS" to setOf(DataType.IDENTITY),
         "READ_PRIVILEGED_PHONE_STATE" to setOf(DataType.IDENTITY),
         "RECORD_AUDIO" to setOf(DataType.MIC),
+        "BODY_SENSORS" to setOf(DataType.HEALTH),
         "CAPTURE_AUDIO_OUTPUT" to setOf(DataType.MIC),
         "CAPTURE_VOICE_COMMUNICATION_OUTPUT" to setOf(DataType.MIC),
         "CAMERA" to setOf(DataType.CAMERA),
@@ -44,7 +50,10 @@ object Exposure {
         "MANAGE_EXTERNAL_STORAGE" to setOf(DataType.FILES),
         "READ_MEDIA_IMAGES" to setOf(DataType.FILES),
         "READ_MEDIA_VIDEO" to setOf(DataType.FILES),
+        "READ_MEDIA_AUDIO" to setOf(DataType.FILES),
         "READ_EXTERNAL_STORAGE" to setOf(DataType.FILES),
+        "WRITE_EXTERNAL_STORAGE" to setOf(DataType.FILES),
+        "ACCESS_MEDIA_LOCATION" to setOf(DataType.LOCATION),
         "READ_CALENDAR" to setOf(DataType.CALENDAR),
         "GET_ACCOUNTS" to setOf(DataType.ACCOUNTS)
     )
