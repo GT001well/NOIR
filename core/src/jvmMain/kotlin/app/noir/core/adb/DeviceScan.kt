@@ -94,52 +94,57 @@ object DeviceScan {
             """.trimIndent()
         )
 
-        adb.push(serial, script, "/data/local/tmp/noir_scan.sh")
-        adb.push(serial, list, "/data/local/tmp/noir_targets.txt")
+        try {
+            adb.push(serial, script, "/data/local/tmp/noir_scan.sh")
+            adb.push(serial, list, "/data/local/tmp/noir_targets.txt")
 
-        var done = 0
-        val total = targets.size
+            var done = 0
+            val total = targets.size
 
-        val execution = adb.execStreaming(
-            listOf("-s", serial, "shell", "sh /data/local/tmp/noir_scan.sh"),
-            timeoutSec = 0
-        ) { line ->
-            when {
-                line.startsWith(RESULT) -> {
-                    val body = line.removePrefix(RESULT)
-                    val pkg = body.substringBefore('|')
-                    val found = body.substringAfter('|', "").split(' ').filter { it.isNotBlank() }
-                    if (pkg.isNotEmpty() && found.isNotEmpty()) result[pkg] = found
-                }
-                line.startsWith(FALLBACK) -> pendingFallback.add(line.removePrefix(FALLBACK).trim())
-                line.startsWith(PROGRESS) -> {
-                    done++
-                    onProgress(done, total)
+            val execution = adb.execStreaming(
+                listOf("-s", serial, "shell", "sh /data/local/tmp/noir_scan.sh"),
+                timeoutSec = 0
+            ) { line ->
+                when {
+                    line.startsWith(RESULT) -> {
+                        val body = line.removePrefix(RESULT)
+                        val pkg = body.substringBefore('|')
+                        val found = body.substringAfter('|', "").split(' ').filter { it.isNotBlank() }
+                        if (pkg.isNotEmpty() && found.isNotEmpty()) result[pkg] = found
+                    }
+                    line.startsWith(FALLBACK) -> pendingFallback.add(line.removePrefix(FALLBACK).trim())
+                    line.startsWith(PROGRESS) -> {
+                        done++
+                        onProgress(done, total)
+                    }
                 }
             }
-        }
 
-        if (done == 0 && targets.isNotEmpty()) {
-            // The script never ran. Fall back to pulling everything rather than
-            // returning a plausible-looking empty report.
-            println("  ! device-side scan produced no progress; pulling ${targets.size} APKs instead")
-            return urlsByPulling(adb, serial, targets, workDir, onProgress)
-        }
+            if (done == 0 && targets.isNotEmpty()) {
+                // The script never ran. Fall back to pulling everything rather than
+                // returning a plausible-looking empty report.
+                println("  ! device-side scan produced no progress; pulling ${targets.size} APKs instead")
+                return urlsByPulling(adb, serial, targets, workDir, onProgress)
+            }
 
-        if (execution.code != 0) {
-            println("  ! device-side scan exited with ${execution.code}; results may be partial")
-        }
+            if (execution.code != 0) {
+                println("  ! device-side scan exited with ${execution.code}; results may be partial")
+            }
 
-        if (pendingFallback.isNotEmpty()) {
-            println("  ! ${pendingFallback.size} APK(s) could not be read by the device's unzip; pulling instead")
-            val fallbackTargets = targets.filter { it.pkg in pendingFallback }
-            result.putAll(
-                urlsByPulling(adb, serial, fallbackTargets, workDir) { index, count ->
-                    print("\r  pulling $index/$count")
-                    System.out.flush()
-                }
-            )
-            println()
+            if (pendingFallback.isNotEmpty()) {
+                println("  ! ${pendingFallback.size} APK(s) could not be read by the device's unzip; pulling instead")
+                val fallbackTargets = targets.filter { it.pkg in pendingFallback }
+                result.putAll(
+                    urlsByPulling(adb, serial, fallbackTargets, workDir) { index, count ->
+                        print("\r  pulling $index/$count")
+                        System.out.flush()
+                    }
+                )
+                println()
+            }
+        } finally {
+            // Short timeout: the device may already be gone by the time we get here.
+            adb.shell(serial, "rm -f /data/local/tmp/noir_scan.sh /data/local/tmp/noir_targets.txt", timeoutSec = 10)
         }
 
         return result

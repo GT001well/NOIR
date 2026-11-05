@@ -347,6 +347,10 @@ private fun cmdDeep(raw: List<String>) {
     val args = Args(raw)
     val pkg = args.positional.firstOrNull()
         ?: throw NoirException("缺少包名。", "用法：noir deep <package> [--serial S] [--out DIR]")
+    pkgValidationError(pkg)?.let {
+        System.err.println("skip package '$pkg': $it")
+        return
+    }
 
     val adb = connectAdb(args)
     val device = awaitDevice(adb, args.value("serial"), interactive = isInteractive())
@@ -400,6 +404,10 @@ private fun cmdBlock(raw: List<String>) {
 
     val actions = ArrayList<String>()
     pkgs.forEach { pkg ->
+        pkgValidationError(pkg)?.let {
+            System.err.println("skip package '$pkg': $it")
+            return@forEach
+        }
         actions += "pm uninstall --user 0 $pkg"
         actions += "cmd appops set $pkg PROJECT_MEDIA ignore"
         actions += "cmd appops set $pkg GET_USAGE_STATS ignore"
@@ -937,6 +945,10 @@ private fun cmdDeepScan(raw: List<String>) {
 }
 
 private fun analyzeOne(adb: Adb, scan: ScanResult, outDir: File, jadxBin: String, app: AppEntry): DeepFinding {
+    pkgValidationError(app.pkg)?.let {
+        return DeepFinding(app.pkg, app.score, 0, emptyMap(), emptySet(), null, null, "invalid package: $it")
+    }
+
     val remote = scan.paths[app.pkg]
         ?: return DeepFinding(app.pkg, app.score, 0, emptyMap(), emptySet(), null, null, "no apk path")
 
@@ -1127,6 +1139,10 @@ private fun offerCleanup(args: Args, adb: Adb, scan: ScanResult, findings: List<
     println("== 卸载高风险用户应用 ==")
     println("# 恢复命令：adb shell pm install-existing --user 0 <package>")
     userHigh.forEach { f ->
+        pkgValidationError(f.pkg)?.let {
+            System.err.println("skip package '${f.pkg}': $it")
+            return@forEach
+        }
         if (!args.flag("yes") && isInteractive()) {
             print("  卸载 ${f.pkg}? [y/N] ")
             val answer = readLine()?.trim()?.lowercase()
@@ -1138,6 +1154,15 @@ private fun offerCleanup(args: Args, adb: Adb, scan: ScanResult, findings: List<
 }
 
 // ── plumbing ───────────────────────────────────────────────────────────────
+
+private fun pkgValidationError(pkg: String): String? = when {
+    pkg.isEmpty() -> "package name is empty"
+    pkg.length > 255 -> "package name is longer than 255 characters"
+    pkg.startsWith('.') || pkg.startsWith('-') -> "package name must not start with '.' or '-'"
+    !pkg.matches(Regex("[A-Za-z0-9._]+")) -> "package name contains unsupported characters"
+    ".." in pkg -> "package name must not contain '..'"
+    else -> null
+}
 
 private fun isInteractive(): Boolean =
     System.console() != null || System.getenv("NOIR_INTERACTIVE") == "1"

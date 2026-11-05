@@ -8,6 +8,7 @@ package app.noir.core.platform
 import java.io.File
 import java.net.HttpURLConnection
 import java.net.URL
+import java.security.MessageDigest
 import java.util.zip.ZipFile
 
 /**
@@ -18,6 +19,12 @@ import java.util.zip.ZipFile
  */
 object Setup {
 
+    // 哈希需按官方发布值填写。
+    private const val ADB_DARWIN_SHA256 = ""
+    private const val ADB_LINUX_SHA256 = ""
+    private const val ADB_WINDOWS_SHA256 = ""
+    private const val JADX_SHA256 = ""
+
     const val ADB_DARWIN = "https://dl.google.com/android/repository/platform-tools-latest-darwin.zip"
     const val ADB_LINUX = "https://dl.google.com/android/repository/platform-tools-latest-linux.zip"
     const val ADB_WINDOWS = "https://dl.google.com/android/repository/platform-tools-latest-windows.zip"
@@ -26,6 +33,13 @@ object Setup {
     fun toolsDir(): File = File(System.getProperty("user.home"), ".noir/tools").apply { mkdirs() }
 
     fun download(url: String, dest: File, onProgress: (Long, Long) -> Unit = { _, _ -> }): Boolean {
+        val expectedSha256 = when (url) {
+            ADB_DARWIN -> ADB_DARWIN_SHA256
+            ADB_LINUX -> ADB_LINUX_SHA256
+            ADB_WINDOWS -> ADB_WINDOWS_SHA256
+            JADX_ZIP -> JADX_SHA256
+            else -> ""
+        }
         var current = URL(url)
         repeat(6) {
             val conn = current.openConnection() as HttpURLConnection
@@ -49,6 +63,7 @@ object Setup {
 
             val total = conn.contentLengthLong
             dest.parentFile?.mkdirs()
+            val digest = MessageDigest.getInstance("SHA-256")
             conn.inputStream.use { input ->
                 dest.outputStream().use { output ->
                     val buffer = ByteArray(64 * 1024)
@@ -57,12 +72,21 @@ object Setup {
                         val n = input.read(buffer)
                         if (n < 0) break
                         output.write(buffer, 0, n)
+                        digest.update(buffer, 0, n)
                         read += n
                         onProgress(read, total)
                     }
                 }
             }
             conn.disconnect()
+            val actualSha256 = digest.digest().joinToString("") { "%02x".format(it.toInt() and 0xff) }
+            if (expectedSha256.isEmpty()) {
+                println("warning: SHA-256 is not configured for $url; skipping verification")
+            } else if (!actualSha256.equals(expectedSha256, ignoreCase = true)) {
+                println("warning: SHA-256 mismatch for $url; deleting $dest")
+                dest.delete()
+                return false
+            }
             return true
         }
         return false
@@ -70,9 +94,20 @@ object Setup {
 
     fun unzip(zip: File, dest: File) {
         dest.mkdirs()
+        val destRoot = dest.canonicalFile
+        val destRootPath = destRoot.canonicalPath + File.separator
+        var skipped = 0
         ZipFile(zip).use { archive ->
             archive.entries().asSequence().forEach { entry ->
-                val target = File(dest, entry.name)
+                if (entry.name.startsWith("/")) {
+                    skipped++
+                    return@forEach
+                }
+                val target = File(destRoot, entry.name).canonicalFile
+                if (!target.canonicalPath.startsWith(destRootPath)) {
+                    skipped++
+                    return@forEach
+                }
                 if (entry.isDirectory) {
                     target.mkdirs()
                 } else {
@@ -82,6 +117,9 @@ object Setup {
                     }
                 }
             }
+        }
+        if (skipped > 0) {
+            println("warning: skipped $skipped unsafe zip entr${if (skipped == 1) "y" else "ies"}")
         }
     }
 
