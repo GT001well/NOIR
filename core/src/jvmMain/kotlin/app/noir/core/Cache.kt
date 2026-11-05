@@ -15,7 +15,7 @@ object Cache {
 
     private val dir = File(System.getProperty("user.home"), ".noir").apply { mkdirs() }
     // Bump when extraction logic changes: old entries may encode failed scans.
-    private const val CACHE_VERSION = "v2"
+    private const val CACHE_VERSION = "v3"
     private val file = File(dir, "endpoints-$CACHE_VERSION.tsv")
     private val map = HashMap<String, String>()
 
@@ -30,16 +30,17 @@ object Cache {
         }
     }
 
-    private fun key(pkg: String, path: String) = "$pkg|$path"
+    // 键里带设备作用域：同一台电脑接两台设备时，同包同路径的端点不会互相串。
+    private fun key(scope: String, pkg: String, path: String) = "$scope|$pkg|$path"
 
-    fun get(pkg: String, path: String): List<String>? {
-        val k = key(pkg, path)
+    fun get(scope: String, pkg: String, path: String): List<String>? {
+        val k = key(scope, pkg, path)
         if (!map.containsKey(k)) return null
         return map[k].orEmpty().split(' ').filter { it.isNotBlank() }
     }
 
-    fun put(pkg: String, path: String, urls: List<String>) {
-        map[key(pkg, path)] = urls.joinToString(" ")
+    fun put(scope: String, pkg: String, path: String, urls: List<String>) {
+        map[key(scope, pkg, path)] = urls.joinToString(" ")
     }
 
     fun flush() {
