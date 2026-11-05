@@ -73,8 +73,8 @@ class ApplyTest {
         assertTrue(applied.contains("before: PROJECT_MEDIA: default"))
         assertTrue(applied.contains("after:  PROJECT_MEDIA: default"))
         assertTrue(applied.contains("user: 0"))
-        assertTrue(rollback.contains("no appops changes were applied"))
-        assertFalse(rollback.contains("adb shell cmd appops set"))
+        // 回滚在执行前就落盘，命令失败也留着，避免设备实际改了却无记录
+        assertTrue(rollback.contains("adb shell cmd appops set --user 0 com.example PROJECT_MEDIA default"))
     }
 
     @Test
@@ -102,5 +102,48 @@ class ApplyTest {
         assertTrue(applied.contains("cmd appops set --user 0 com.example PROJECT_MEDIA ignore\tok (0)"))
         assertTrue(applied.contains("after:  PROJECT_MEDIA: ignore"))
         assertTrue(rollback.contains("adb shell cmd appops set --user 0 com.example PROJECT_MEDIA default"))
+    }
+
+    @Test
+    fun `exit 0 without a mode change is not reported as success`() {
+        if (Platform.isWindows) return
+        val (script, result) = fixture(
+            """
+            case "${'$'}cmd" in
+              *"cmd appops get"*) echo "PROJECT_MEDIA: default"; exit 0 ;;
+              *"cmd appops set"*) exit 0 ;;
+            esac
+            exit 1
+            """.trimIndent()
+        )
+
+        applyCommands(Adb(script.absolutePath), result, listOf(AppOpAction("com.example", "PROJECT_MEDIA")))
+
+        val applied = File(result.outDir, "applied.txt").readText()
+        val rollback = File(result.outDir, "rollback.txt").readText()
+        assertTrue(applied.contains("not applied (still default)"))
+        // set 已经跑过一次，回滚记录必须留着，否则真改了也改不回来
+        assertTrue(rollback.contains("adb shell cmd appops set --user 0 com.example PROJECT_MEDIA default"))
+    }
+
+    @Test
+    fun `unreadable current mode is skipped instead of guessed`() {
+        if (Platform.isWindows) return
+        val (script, result) = fixture(
+            """
+            case "${'$'}cmd" in
+              *"cmd appops get"*) echo "NONE"; echo "No operations."; exit 0 ;;
+              *"cmd appops set"*) echo "should not run" > "${'$'}STATE"; exit 0 ;;
+            esac
+            exit 1
+            """.trimIndent()
+        )
+
+        applyCommands(Adb(script.absolutePath), result, listOf(AppOpAction("com.example", "PROJECT_MEDIA")))
+
+        val applied = File(result.outDir, "applied.txt").readText()
+        val rollback = File(result.outDir, "rollback.txt").readText()
+        assertTrue(applied.contains("skipped: cannot read the current mode"))
+        assertFalse(rollback.contains("adb shell cmd appops set"))
     }
 }

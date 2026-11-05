@@ -43,6 +43,10 @@ private val BOOLEAN_FLAGS = setOf(
     "all", "purge"
 )
 
+private val VALUE_FLAGS = setOf(
+    "serial", "out", "min", "limit", "only", "adb", "jadx", "top", "jobs", "timeout"
+)
+
 private var QUIET = false
 
 private fun say(message: String) {
@@ -324,7 +328,13 @@ private fun cmdAuto(raw: List<String>) {
             return
         }
     }
-    applyCommands(connectAdb(args), result, planned)
+    val failedAppops = applyCommands(connectAdb(args), result, planned)
+    if (failedAppops > 0) {
+        throw NoirException(
+            "$failedAppops 条 appops 未生效。",
+            "看 ${File(result.outDir, "applied.txt").absolutePath} 的 before/after，回滚命令在 rollback.txt。"
+        )
+    }
 }
 
 private fun cmdUi(raw: List<String>) {
@@ -365,7 +375,14 @@ private fun cmdDeep(raw: List<String>) {
 
     val apk = File(outDir, "$pkg.apk")
     println("[*] pulling $remote")
-    adb.pull(device.serial, remote, apk)
+    apk.delete() // 旧包可能是上一个版本
+    val pulled = adb.pull(device.serial, remote, apk)
+    if (!pulled.ok || !apk.exists()) {
+        throw NoirException(
+            "拉取 APK 失败（退出码 ${pulled.code}）。",
+            "检查设备连接与存储空间；必要时用 --serial 指定设备后重试。"
+        )
+    }
     println("[*] apk: ${apk.length() / 1024} KiB")
 
     val urls = ApkScan.urls(apk)
@@ -425,10 +442,18 @@ private fun cmdBlock(raw: List<String>) {
     }
 
     println()
+    var blockFailed = 0
     actions.forEach { action ->
         print("> $action ... ")
         val result = adb.shell(device.serial, action)
+        if (!result.ok) blockFailed++
         println(if (result.ok) "ok" else "failed (${result.code}) ${result.output.trim().take(120)}")
+    }
+    if (blockFailed > 0) {
+        throw NoirException(
+            "$blockFailed 条处置未执行成功。",
+            "逐条看上面的失败输出；已成功的卸载可用 pm install-existing 恢复。"
+        )
     }
 }
 
@@ -523,22 +548,44 @@ private fun performScan(args: Args): ScanResult {
     val device = awaitDevice(adb, args.value("serial"), interactive = isInteractive())
     val outDir = File(args.value("out") ?: "noir-out").apply { mkdirs() }
     val minScore = args.value("min")?.toIntOrNull() ?: 0
-    val limit = args.value("limit")?.toIntOrNull() ?: 500
+    val limit = args.value("limit")?.toIntOrNull() ?: if (args.flag("all")) Int.MAX_VALUE else 500
 
     say("[*] host: ${Platform.describe()}")
     say("[*] device: ${device.serial} (${device.model})")
 
     val paths = DeviceScan.packagePaths(adb, device.serial)
+    if (paths.isEmpty()) {
+        throw NoirException(
+            "读取应用清单失败（pm list packages 没有返回任何包）。",
+            "先确认设备授权：adb devices；再手工执行 adb shell pm list packages -f 看是否有输出。"
+        )
+    }
     say("[*] packages: ${paths.size}")
 
     if (!QUIET) print("[*] reading dumpsys package ... ")
     val dump = adb.shell(device.serial, "dumpsys package", timeoutSec = 600)
+    if (!dump.ok || dump.output.isBlank()) {
+        throw NoirException(
+            "读取 dumpsys package 失败（退出码 ${dump.code}${if (dump.timedOut) "，超时" else ""}）。",
+            "手工执行 adb shell dumpsys package 看能否出内容；设备锁屏或授权异常时常见。"
+        )
+    }
+    if (dump.truncated) {
+        throw NoirException(
+            "dumpsys 输出读取不完整，结果不可信。",
+            "重跑一次；持续出现说明 adb 输出过大或链路卡住。"
+        )
+    }
     say("${dump.output.length / 1024} KiB")
 
     val meta = Dumpsys.parse(dump.output)
     say("[*] parsed: ${meta.size}")
 
-    val only = args.value("only")?.let { runCatching { Regex(it) }.getOrNull() }
+    val only = args.value("only")?.let { raw ->
+        runCatching { Regex(raw) }.getOrElse {
+            throw NoirException("--only 不是合法正则：$raw", "检查转义，或去掉 --only 做全量扫描。")
+        }
+    }
     val candidates = meta.entries.filter { (pkg, m) ->
         m.perms.contains("INTERNET") &&
             m.perms.count { it in Rules.SENSITIVE } > 0 &&
@@ -553,23 +600,39 @@ private fun performScan(args: Args): ScanResult {
     val targets = candidates.map { PackagePath(it.key, paths.getValue(it.key)) }
     val endpoints = HashMap<String, List<String>>()
     val missing = ArrayList<PackagePath>()
+    // 缓存作用域带上序列号与系统指纹：换设备（含模拟器）不会复用别台的端点结果
+    val cacheScope = "${device.serial}|${reportMeta.fingerprint}"
 
     targets.forEach { target ->
-        val hit = Cache.get(target.pkg, target.path)
+        val hit = Cache.get(cacheScope, target.pkg, target.path)
         if (hit != null) endpoints[target.pkg] = hit else missing += target
     }
 
     if (missing.isNotEmpty()) {
         say("[*] analysing ${missing.size} new/changed APKs (cache hits: ${targets.size - missing.size})")
         val started = System.currentTimeMillis()
-        val fresh = DeviceScan.urls(adb, device.serial, missing, File(outDir, "work")) { done, total ->
+        val failures = HashSet<String>()
+        val fresh = DeviceScan.urls(adb, device.serial, missing, File(outDir, "work"), { done, total ->
             if (!QUIET) {
                 print(progressLine(started, done, total))
                 System.out.flush()
             }
-        }
+        }, failures)
         if (!QUIET) println()
-        missing.forEach { target -> Cache.put(target.pkg, target.path, fresh[target.pkg].orEmpty()) }
+        missing.forEach { target ->
+            // 抽取失败的包不写缓存，否则下次会被当成「零个端点」永久跳过
+            if (target.pkg in failures) return@forEach
+            Cache.put(cacheScope, target.pkg, target.path, fresh[target.pkg].orEmpty())
+        }
+        if (failures.isNotEmpty()) {
+            say("[!] ${failures.size} package(s) failed to extract; not cached, retried next run")
+            File(outDir, "incomplete.txt").writeText(
+                buildString {
+                    appendLine("# 本次端点抽取未完成的包，报告里对应条目按「没有端点」呈现，不代表真的没有")
+                    failures.sorted().forEach { appendLine(it) }
+                }
+            )
+        }
         Cache.flush()
         endpoints.putAll(fresh)
     } else {
@@ -629,8 +692,10 @@ private fun writeReports(result: ScanResult, recommendations: List<Recommendatio
     File(result.outDir, "plan.txt").writeText(
         plannedCommands(recommendations, result.meta.user).joinToString("\n", postfix = "\n")
     )
-    File(result.outDir, "rollback.txt").writeText(
-        rollbackLines(recommendations, result.meta.user).joinToString("\n", postfix = "\n")
+    // 这里只是按推荐动作推测的回滚，不是实际执行记录；真实回滚由 applyCommands 写入 rollback.txt
+    File(result.outDir, "plan-rollback.txt").writeText(
+        "# NOIR planned rollback (predicted, not applied)\n" +
+            rollbackLines(recommendations, result.meta.user).joinToString("\n", postfix = "\n")
     )
 }
 
@@ -722,11 +787,10 @@ private fun classifyAppOpFailure(output: String): String = when {
     else -> "rejected"
 }
 
-internal fun applyCommands(adb: Adb, result: ScanResult, planned: List<AppOpAction>) {
-    if (planned.isEmpty()) return
+internal fun applyCommands(adb: Adb, result: ScanResult, planned: List<AppOpAction>): Int {
+    if (planned.isEmpty()) return 0
     val user = result.meta.user.ifBlank { null }
     val applied = ArrayList<String>()
-    val rollback = ArrayList<String>()
     var failed = 0
     var permissionFailures = 0
 
@@ -742,17 +806,53 @@ internal fun applyCommands(adb: Adb, result: ScanResult, planned: List<AppOpActi
     applied.add("#")
 
     println()
+    val rollbackFile = File(result.outDir, "rollback.txt")
+    if (rollbackFile.exists() && rollbackFile.length() > 0) {
+        // 追加而不是覆盖：上一轮改过的原模式必须留着，否则恢复链会断
+        rollbackFile.appendText("\n# ── session ${result.meta.generatedAt} ──\n")
+    } else {
+        rollbackFile.writeText(
+            buildString {
+                appendLine("# NOIR rollback")
+                appendLine("# tool: ${result.meta.tool}")
+                appendLine("# device: ${result.device.model} (${result.device.serial}) · user ${result.meta.user.ifBlank { "unknown" }}")
+                appendLine("# 每条在改动设备之前写入；即使命令结果未确认也保留，宁可多一条也不要丢恢复手段")
+            }
+        )
+    }
+    var rollbackCount = 0
     planned.forEach { action ->
         val before = adb.shell(result.device.serial, action.getCommand(user), timeoutSec = 30)
+        val prior = parseAppOpMode(before.output, action.op)
+        if (prior == null) {
+            // 读不到原值就不改：否则回滚只能猜成 default，原来的 allow 恢复不回来
+            failed++
+            val note = "skipped: cannot read the current mode"
+            applied.add("${action.setCommand(user)}\t$note")
+            applied.add("  before: ${flatOutput(before.output)}")
+            println("  %-72s %s".format(action.setCommand(user), note))
+            return@forEach
+        }
+
+        // 先落盘回滚再改设备：进程中途被杀也不会丢掉恢复命令
+        rollbackFile.appendText(action.rollbackCommand(user, prior) + "\n")
+        rollbackCount++
+
         val res = adb.shell(result.device.serial, action.setCommand(user), timeoutSec = 30)
         val after = adb.shell(result.device.serial, action.getCommand(user), timeoutSec = 30)
+        val afterMode = parseAppOpMode(after.output, action.op)
+        val verified = after.ok && afterMode.equals("ignore", ignoreCase = true)
+        val appliedOk = res.ok && verified
         val status = when {
             res.timedOut -> "timeout (${res.code})"
-            res.ok -> "ok (0)"
-            else -> "failed (${res.code})"
+            !res.ok -> "failed (${res.code})"
+            !after.ok -> "unverified (cannot read mode, code ${after.code})"
+            afterMode == null -> "unverified (unparsable mode)"
+            !afterMode.equals("ignore", ignoreCase = true) -> "not applied (still $afterMode)"
+            else -> "ok (0)"
         }
-        val kind = if (!res.ok) classifyAppOpFailure(res.output) else ""
-        if (!res.ok) {
+        val kind = if (!appliedOk) classifyAppOpFailure(res.output) else ""
+        if (!appliedOk) {
             failed++
             if (kind == "system permission") permissionFailures++
         }
@@ -774,27 +874,12 @@ internal fun applyCommands(adb: Adb, result: ScanResult, planned: List<AppOpActi
             if (lines.size > 4) println("      ... (${lines.size - 4} more lines in applied.txt)")
         }
 
-        if (res.ok) {
-            val prior = parseAppOpMode(before.output, action.op) ?: "default"
-            rollback.add(action.rollbackCommand(user, prior))
-        }
     }
 
     File(result.outDir, "applied.txt").writeText(applied.joinToString("\n", postfix = "\n"))
-
-    val rollbackText = buildString {
-        appendLine("# NOIR rollback")
-        appendLine("# generated: ${result.meta.generatedAt}")
-        appendLine("# tool: ${result.meta.tool}")
-        appendLine("# only commands that succeeded in this run are listed")
-        appendLine("# device: ${result.device.model} (${result.device.serial}) · user ${result.meta.user.ifBlank { "unknown" }}")
-        if (rollback.isEmpty()) {
-            appendLine("# no appops changes were applied")
-        } else {
-            rollback.forEach { appendLine(it) }
-        }
+    if (rollbackCount == 0) {
+        rollbackFile.appendText("# no appops changes were applied\n")
     }
-    File(result.outDir, "rollback.txt").writeText(rollbackText)
     File(result.outDir, "applied.txt").let { println("\n[*] applied: ${it.absolutePath}") }
     println("[*] rollback: ${File(result.outDir, "rollback.txt").absolutePath}")
     println("[*] ${planned.size - failed}/${planned.size} appops commands applied")
@@ -806,6 +891,7 @@ internal fun applyCommands(adb: Adb, result: ScanResult, planned: List<AppOpActi
             println("    check Developer options → Permission monitoring, or use Shizuku.")
         }
     }
+    return failed
 }
 
 private fun renderDashboard(args: Args, result: ScanResult, recommendations: List<Recommendation>): String {
@@ -904,11 +990,12 @@ private fun cmdDeepScan(raw: List<String>) {
     val pool = Executors.newFixedThreadPool(jobs)
     val done = AtomicInteger()
     val started = System.currentTimeMillis()
+    val jadxTimeoutSec = args.value("timeout")?.toLongOrNull()?.takeIf { it > 0 } ?: 1800L
 
     val findings = targets.map { app ->
         pool.submit<DeepFinding> {
             val result = try {
-                analyzeOne(adb, scan, outDir, jadxBin, app)
+                analyzeOne(adb, scan, outDir, jadxBin, app, jadxTimeoutSec)
             } catch (e: Exception) {
                 DeepFinding(app.pkg, app.score, 0, emptyMap(), emptySet(), null, null, e.message ?: e::class.simpleName)
             }
@@ -944,7 +1031,7 @@ private fun cmdDeepScan(raw: List<String>) {
     offerCleanup(args, adb, scan, ranked)
 }
 
-private fun analyzeOne(adb: Adb, scan: ScanResult, outDir: File, jadxBin: String, app: AppEntry): DeepFinding {
+private fun analyzeOne(adb: Adb, scan: ScanResult, outDir: File, jadxBin: String, app: AppEntry, jadxTimeoutSec: Long): DeepFinding {
     pkgValidationError(app.pkg)?.let {
         return DeepFinding(app.pkg, app.score, 0, emptyMap(), emptySet(), null, null, "invalid package: $it")
     }
@@ -952,8 +1039,21 @@ private fun analyzeOne(adb: Adb, scan: ScanResult, outDir: File, jadxBin: String
     val remote = scan.paths[app.pkg]
         ?: return DeepFinding(app.pkg, app.score, 0, emptyMap(), emptySet(), null, null, "no apk path")
 
+    val src = File(outDir, "src/${app.pkg}")
+    val marker = File(src, ".noir-ok")
+    // 标记里带设备作用域：同一个输出目录接不同设备时不能复用上一台的源码
+    val markerValue = "${scan.device.serial}|${scan.meta.fingerprint}|$remote"
+    val cached = marker.exists() && marker.readText().trim() == markerValue
+
     val apk = File(outDir, "apks/${app.pkg}.apk")
-    if (!apk.exists()) {
+    if (!cached) {
+        // 远端路径变了说明包更新过，本地 apk 可能还是旧版本，先删掉再拉
+        apk.delete()
+        apk.parentFile?.mkdirs()
+        adb.pull(scan.device.serial, remote, apk)
+        src.deleteRecursively()
+        src.mkdirs()
+    } else if (!apk.exists()) {
         apk.parentFile?.mkdirs()
         adb.pull(scan.device.serial, remote, apk)
     }
@@ -961,20 +1061,13 @@ private fun analyzeOne(adb: Adb, scan: ScanResult, outDir: File, jadxBin: String
         return DeepFinding(app.pkg, app.score, 0, emptyMap(), emptySet(), null, null, "pull failed")
     }
 
-    val src = File(outDir, "src/${app.pkg}")
-    val marker = File(src, ".noir-ok")
-    val cached = marker.exists() && marker.readText().trim() == remote
-    if (!cached) {
-        src.deleteRecursively()
-        src.mkdirs()
+    val exit = if (cached) 0 else Jadx(jadxBin).decompile(apk, src, timeoutSec = jadxTimeoutSec)
+    if (exit != 0) {
+        // 反编译半途失败时 sources 目录可能已存在，此时计分会把「没扫到」当成「干净」。
+        val reason = if (exit == -1) "jadx timeout after ${jadxTimeoutSec}s" else "jadx exit $exit"
+        return DeepFinding(app.pkg, app.score, 0, emptyMap(), emptySet(), ManifestAnalyzer.analyze(apk), null, reason)
     }
-
-    val exit = if (cached) 0 else Jadx(jadxBin).decompile(apk, src)
-    val sources = File(src, "sources")
-    if (exit != 0 && !sources.isDirectory) {
-        return DeepFinding(app.pkg, app.score, 0, emptyMap(), emptySet(), ManifestAnalyzer.analyze(apk), null, "jadx exit $exit")
-    }
-    runCatching { marker.writeText(remote) }
+    runCatching { marker.writeText(markerValue) }
 
     val signals = countSignals(src)
     var risk = DEEP_SIGNALS.entries.sumOf { (key, def) ->
@@ -1126,7 +1219,13 @@ private fun offerCleanup(args: Args, adb: Adb, scan: ScanResult, findings: List<
             return
         }
     }
-    applyCommands(adb, scan, planned)
+    val failedAppops = applyCommands(adb, scan, planned)
+    if (failedAppops > 0) {
+        throw NoirException(
+            "$failedAppops 条 appops 未生效。",
+            "看 ${File(scan.outDir, "applied.txt").absolutePath} 的 before/after，回滚命令在 rollback.txt。"
+        )
+    }
 
     if (!args.flag("purge")) return
 
@@ -1137,7 +1236,8 @@ private fun offerCleanup(args: Args, adb: Adb, scan: ScanResult, findings: List<
     }
     println()
     println("== 卸载高风险用户应用 ==")
-    println("# 恢复命令：adb shell pm install-existing --user 0 <package>")
+    val uninstallUser = scan.meta.user.ifBlank { "0" }
+    println("# 恢复命令：adb shell pm install-existing --user $uninstallUser <package>")
     userHigh.forEach { f ->
         pkgValidationError(f.pkg)?.let {
             System.err.println("skip package '${f.pkg}': $it")
@@ -1148,7 +1248,7 @@ private fun offerCleanup(args: Args, adb: Adb, scan: ScanResult, findings: List<
             val answer = readLine()?.trim()?.lowercase()
             if (answer != "y" && answer != "yes") return@forEach
         }
-        val result = adb.shell(scan.device.serial, "pm uninstall --user 0 ${f.pkg}")
+        val result = adb.shell(scan.device.serial, "pm uninstall --user $uninstallUser ${f.pkg}")
         println("  %-44s %s".format(f.pkg, if (result.ok) "uninstalled" else "failed (${result.code})"))
     }
 }
@@ -1211,9 +1311,10 @@ private fun awaitDevice(adb: Adb, requested: String?, interactive: Boolean): Dev
                 throw NoirException("没有选择设备。", "用 --serial <id> 指定要扫描的设备。")
             }
 
-            val chosen = physical.firstOrNull() ?: online.first()
-            println("提示：检测到 ${online.size} 台设备，使用 ${chosen.serial}；可用 --serial 指定。")
-            return chosen
+            throw NoirException(
+                "检测到 ${online.size} 台设备，无法自动选择。",
+                "用 --serial 指定目标：${online.joinToString { it.serial }}"
+            )
         }
 
         val unauthorized = devices.any { it.state == "unauthorized" }
@@ -1248,12 +1349,17 @@ private class Args(raw: List<String>) {
             val arg = raw[i]
             if (arg.startsWith("--")) {
                 val name = arg.substring(2)
-                val takesValue = name !in BOOLEAN_FLAGS && i + 1 < raw.size && !raw[i + 1].startsWith("--")
-                if (takesValue) {
-                    values[name] = raw[i + 1]
-                    i++
-                } else {
-                    flags.add(name)
+                when {
+                    name in BOOLEAN_FLAGS -> flags.add(name)
+                    name in VALUE_FLAGS -> {
+                        val next = raw.getOrNull(i + 1)
+                        if (next == null || next.startsWith("--")) {
+                            throw NoirException("选项 --$name 缺少取值。", "例如 --$name <值>；用 --help 看用法。")
+                        }
+                        values[name] = next
+                        i++
+                    }
+                    else -> throw NoirException("未知选项 --$name。", "运行 noir --help 查看可用选项。")
                 }
             } else {
                 positional.add(arg)
