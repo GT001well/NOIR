@@ -181,7 +181,7 @@ object Tui {
             val suffix = if (rest > 0) "   ${s.dim("+$rest more")}" else ""
             line("  ${s.dim("actions")}   $shown$suffix")
         }
-        line("  ${s.dim("auto-safe")} ${s.fg(52, 211, 153, recommendations.count { it.autoSafe }.toString())} ${s.dim("reversible appops, rollback written next to the report")}")
+        line("  ${s.dim("auto-safe")} ${s.fg(52, 211, 153, recommendations.count { it.autoSafe }.toString())} ${s.dim("reversible appops, plan + predicted rollback written next to the report")}")
         line()
 
         border(cornerBL, cornerBR)
